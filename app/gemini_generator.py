@@ -104,7 +104,6 @@ class GeminiGenerator(ResponseGenerator):
 
         # Model: pick a solid default; allow override via ctor or env.
         self.model_name = model_name or os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
-        self._model = genai.GenerativeModel(self.model_name)
         self._guard = get_qwen3_guard()
 
         # Store base instruction and compile to a Jinja template
@@ -190,7 +189,8 @@ class GeminiGenerator(ResponseGenerator):
         )
 
         # Call the API (use async method to avoid blocking the event loop)
-        resp = await self._model.generate_content_async(
+        model = genai.GenerativeModel(self.model_name)
+        resp = await model.generate_content_async(
             contents=contents,
             generation_config=generation_config,
         )

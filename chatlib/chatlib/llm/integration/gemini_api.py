@@ -105,24 +105,14 @@ class GeminiAPI(ChatCompletionAPI):
         super().__init__()
         self.__injected_initial_system_message = injected_initial_system_message
         self.__safety_settings = safety_settings or _SAFETY_SETTINGS_BLOCK_NONE
-        self.__configured_model_name = None
-
-    @staticmethod
-    @cache
-    def __model_handle(model_name: str) -> genai.GenerativeModel:
-        return genai.GenerativeModel(model_name)
 
     def __resolve_model_name(self, requested_model: str | None) -> str:
         env_model = env_helper.get_env_variable("GEMINI_COMPLETION_MODEL")
-        candidate = env_model or requested_model or self.__configured_model_name
+        candidate = env_model or requested_model
         if not candidate:
             candidate = _DEFAULT_MODEL_NAME
         candidate = candidate.strip()
         return _MODEL_ALIASES.get(candidate, candidate)
-
-    def __get_model(self, requested_model: str | None) -> genai.GenerativeModel:
-        model_name = self.__resolve_model_name(requested_model)
-        return self.__model_handle(model_name)
 
     def is_messages_within_token_limit(self, messages: list[ChatCompletionMessage], model: str,
                                        tolerance: int = 120) -> bool:
@@ -154,7 +144,8 @@ class GeminiAPI(ChatCompletionAPI):
         resolved_model_name = self.__resolve_model_name(model)
 
         converted_messages = convert_to_gemini_messages(injected_messages)
-        response: GenerateContentResponse = await self.__get_model(model).generate_content_async(
+        model_instance = genai.GenerativeModel(resolved_model_name)
+        response: GenerateContentResponse = await model_instance.generate_content_async(
             contents=converted_messages,
             generation_config=params,
             safety_settings=self.__safety_settings
@@ -176,5 +167,7 @@ class GeminiAPI(ChatCompletionAPI):
         injected_messages = self.__convert_messages(messages)
 
         converted_messages = convert_to_gemini_messages(injected_messages)
+        resolved_model_name = self.__resolve_model_name(model)
+        model_instance = genai.GenerativeModel(resolved_model_name)
 
-        return self.__get_model(model).count_tokens(converted_messages).total_tokens
+        return model_instance.count_tokens(converted_messages).total_tokens

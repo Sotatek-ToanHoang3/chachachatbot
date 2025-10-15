@@ -10,6 +10,7 @@ from chatlib.llm.chat_completion_api import ChatCompletionAPI, ChatCompletionMes
 from chatlib.utils.integration import APIAuthorizationVariableType, APIAuthorizationVariableSpec, \
     APIAuthorizationVariableSpecPresets
 from chatlib.llm.chat_completion_api import ChatCompletionResult
+from chatlib.utils import env_helper
 
 # https://ai.google.dev/tutorials/python_quickstart
 # https://github.com/google/generative-ai-python/blob/main/google/generativeai/generative_models.py#L382-L423
@@ -22,7 +23,21 @@ _SAFETY_SETTINGS_BLOCK_NONE = [
                        "HARM_CATEGORY_DANGEROUS_CONTENT"]
 ]
 
-GEMINI_PRO_TOKEN_LIMIT = 30720
+GEMINI_TOKEN_LIMIT = 30720
+
+_MODEL_ALIASES = {
+    "gemini-pro": "models/gemini-1.5-pro",
+    "models/gemini-pro": "models/gemini-1.5-pro",
+    "gemini-1.5-pro": "models/gemini-1.5-pro",
+    "gemini-1.5-pro-latest": "models/gemini-1.5-pro-latest",
+    "gemini-1.5-flash": "models/gemini-1.5-flash",
+    "gemini-1.5-flash-latest": "models/gemini-1.5-flash-latest",
+    "gemini-2.0-flash": "models/gemini-2.0-flash-exp",
+    "gemini-2.5-flash": "models/gemini-2.5-flash",
+    "gemini-2.5-pro": "models/gemini-2.5-pro",
+}
+
+_DEFAULT_MODEL_NAME = "models/gemini-1.5-pro"
 
 
 class GeminiChatMessageRole(StrEnum):
@@ -90,15 +105,29 @@ class GeminiAPI(ChatCompletionAPI):
         super().__init__()
         self.__injected_initial_system_message = injected_initial_system_message
         self.__safety_settings = safety_settings or _SAFETY_SETTINGS_BLOCK_NONE
+        self.__configured_model_name = None
 
+    @staticmethod
     @cache
-    def model(self) -> genai.GenerativeModel:
-        return genai.GenerativeModel('gemini-pro')
+    def __model_handle(model_name: str) -> genai.GenerativeModel:
+        return genai.GenerativeModel(model_name)
+
+    def __resolve_model_name(self, requested_model: str | None) -> str:
+        env_model = env_helper.get_env_variable("GEMINI_COMPLETION_MODEL")
+        candidate = env_model or requested_model or self.__configured_model_name
+        if not candidate:
+            candidate = _DEFAULT_MODEL_NAME
+        candidate = candidate.strip()
+        return _MODEL_ALIASES.get(candidate, candidate)
+
+    def __get_model(self, requested_model: str | None) -> genai.GenerativeModel:
+        model_name = self.__resolve_model_name(requested_model)
+        return self.__model_handle(model_name)
 
     def is_messages_within_token_limit(self, messages: list[ChatCompletionMessage], model: str,
                                        tolerance: int = 120) -> bool:
         self.assert_authorize()
-        return self.count_token_in_messages(messages, model) < GEMINI_PRO_TOKEN_LIMIT - tolerance
+        return self.count_token_in_messages(messages, model) < GEMINI_TOKEN_LIMIT - tolerance
 
     def __convert_messages(self, messages: list[ChatCompletionMessage]) -> list[ChatCompletionMessage]:
         # Tweak system instruction
@@ -122,9 +151,10 @@ class GeminiAPI(ChatCompletionAPI):
 
     async def _run_chat_completion_impl(self, model: str, messages: list[ChatCompletionMessage], params: dict) -> ChatCompletionResult:
         injected_messages = self.__convert_messages(messages)
+        resolved_model_name = self.__resolve_model_name(model)
 
         converted_messages = convert_to_gemini_messages(injected_messages)
-        response: GenerateContentResponse = await self.model().generate_content_async(
+        response: GenerateContentResponse = await self.__get_model(model).generate_content_async(
             contents=converted_messages,
             generation_config=params,
             safety_settings=self.__safety_settings
@@ -138,7 +168,7 @@ class GeminiAPI(ChatCompletionAPI):
                 message=ChatCompletionMessage(**top_choice["message"]),
                 finish_reason=top_choice["finish_reason"],
                 provider=self.provider_name(),
-                model=model
+                model=resolved_model_name
             )
 
     def count_token_in_messages(self, messages: list[ChatCompletionMessage], model: str) -> int:
@@ -147,4 +177,4 @@ class GeminiAPI(ChatCompletionAPI):
 
         converted_messages = convert_to_gemini_messages(injected_messages)
 
-        return self.model().count_tokens(converted_messages).total_tokens
+        return self.__get_model(model).count_tokens(converted_messages).total_tokens

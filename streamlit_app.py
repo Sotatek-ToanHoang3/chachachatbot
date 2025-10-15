@@ -47,6 +47,13 @@ def _reset_session():
     st.session_state.dialogue = []
 
 
+def _rerun_app() -> None:
+    if hasattr(st, "rerun"):
+        st.rerun()
+    else:
+        st.experimental_rerun()
+
+
 # ------------------------------- Streamlit UI ------------------------------ #
 st.set_page_config(page_title="ChaCha Chatbot", page_icon="💬", layout="wide")
 _ensure_session_state()
@@ -71,11 +78,11 @@ if start_clicked:
     )
     initial_turn = asyncio.run(_generate_initial_turn(st.session_state.generator))
     st.session_state.dialogue.append(initial_turn)
-    st.experimental_rerun()
+    _rerun_app()
 
 if st.sidebar.button("Clear conversation", type="primary"):
     _reset_session()
-    st.experimental_rerun()
+    _rerun_app()
 
 st.title("ChaCha – Emotional Support & Assignment Tutor")
 st.caption("Share how you're feeling or ask for help with homework. ChaCha will respond in kid-friendly language and switch to tutor mode when appropriate.")
@@ -105,4 +112,4 @@ if user_prompt:
         st.session_state.dialogue.append(DialogueTurn(message=user_prompt, is_user=True))
         assistant_turn = asyncio.run(_generate_reply(st.session_state.generator, st.session_state.dialogue))
         st.session_state.dialogue.append(assistant_turn)
-        st.experimental_rerun()
+        _rerun_app()

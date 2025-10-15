@@ -19,7 +19,7 @@ nanoid = "^2.0.0"
 python-dotenv = "^1.0.0"
 pendulum = "^3.0.0"
 jsonlines = "^3.1.0"
-chatlib = {git = "https://github.com/yghokim/chatlib.git", branch="main"}
+chatlib = {path = "chatlib", develop = true}
 gunicorn = "^22.0.0"
 google-generativeai = "^0.3.1"
 transformers = ">=4.55.0,<5.0.0"

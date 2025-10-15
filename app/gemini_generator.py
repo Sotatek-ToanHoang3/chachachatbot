@@ -8,7 +8,11 @@ from typing import Any
 from chatlib.chatbot import DialogueTurn
 from chatlib.chatbot.generators import ResponseGenerator
 from chatlib.utils.jinja_utils import convert_to_jinja_template
-from app.guard import get_qwen3_guard
+from app.guard.qwen3_guard import (
+    _CONTROVERSIAL_LABEL,
+    _UNSAFE_LABEL,
+    get_qwen3_guard,
+)
 
 # Official Google Generative AI client
 import google.generativeai as genai
@@ -120,6 +124,7 @@ class GeminiGenerator(ResponseGenerator):
         # Build context for your base instruction template
         context = dict(self._params)
         guard_metadata: dict[str, Any] = {}
+        prompt_risk_label: str | None = None
         last_user_turn: DialogueTurn | None = None
         if dialogue:
             last_turn = dialogue[-1]
@@ -148,10 +153,11 @@ class GeminiGenerator(ResponseGenerator):
                 try:
                     prompt_decision = await self._guard.moderate_prompt(last_user_turn.message)
                     guard_metadata["prompt"] = prompt_decision.to_dict()
+                    prompt_risk_label = prompt_decision.label
                 except Exception:
                     logger.exception("Qwen3Guard prompt moderation failed.")
                 else:
-                    if not prompt_decision.allowed:
+                    if prompt_risk_label == _UNSAFE_LABEL:
                         warning = self._build_safety_support_message(prompt_decision, locale)
                         metadata = {"moderation": guard_metadata, "safety_intervention": {
                             "type": "prompt",
@@ -162,6 +168,12 @@ class GeminiGenerator(ResponseGenerator):
 
         # Render the system instruction
         system_instruction = self._template.render(**context)
+        if prompt_risk_label == _CONTROVERSIAL_LABEL:
+            system_instruction = (
+                f"{system_instruction}\n\n"
+                "Safety Priority: The child may describe bullying or anger. Validate their feelings, "
+                "discourage retaliation, and encourage involving a trusted adult for support."
+            )
 
         # Convert dialogue to Google "contents" and prepend dynamic system instruction.
         contents: list[dict] = []
@@ -224,7 +236,7 @@ class GeminiGenerator(ResponseGenerator):
             except Exception:
                 logger.exception("Qwen3Guard stream moderation failed.")
             else:
-                if not stream_decision.allowed:
+                if stream_decision.risk_level == _UNSAFE_LABEL:
                     warning = self._build_safety_support_message(stream_decision, context.get("locale"))
                     metadata = {"moderation": guard_metadata, "safety_intervention": {
                         "type": "response",

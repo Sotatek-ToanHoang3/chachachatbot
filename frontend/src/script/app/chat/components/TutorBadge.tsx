@@ -1,5 +1,5 @@
 import { AcademicCapIcon } from "@heroicons/react/24/solid"
-import chachaImage from "../../../CHACHA.png"
+import chachaImage from "../../../../CHACHA.png"
 
 export const TutorBadge = (props: { title?: string, subtitle?: string }) => {
   const titleText = props.title ?? "Study Buddy Mode"

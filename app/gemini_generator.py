@@ -19,12 +19,15 @@ class GeminiGenerator(ResponseGenerator):
     def __init__(self, base_instruction: str, special_tokens=None, model_name: str | None = None):
         super().__init__()
         # Use the official client instead of the chatlib GeminiAPI wrapper
-        api_key = os.getenv("GEMINI_API_KEY")  # DO NOT hardcode keys
+        api_key = (
+            os.getenv("GEMINI_API_KEY")
+            or os.getenv("GOOGLE_API_KEY")
+        )
         if not api_key:
-            raise RuntimeError("GEMINI_API_KEY is not set")
+            raise RuntimeError("Set GEMINI_API_KEY (or GOOGLE_API_KEY) before starting the app.")
         # Ensure dependent integrations (chatlib) see the same key.
-        os.environ.setdefault("GOOGLE_API_KEY", api_key)
         os.environ.setdefault("GEMINI_API_KEY", api_key)
+        os.environ.setdefault("GOOGLE_API_KEY", api_key)
         os.environ.setdefault("GEMINI_COMPLETION_MODEL", model_name or os.getenv("GEMINI_MODEL") or "gemini-2.5-flash")
         genai.configure(api_key=api_key)
 

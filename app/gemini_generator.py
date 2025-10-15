@@ -15,16 +15,50 @@ from google.generativeai import types
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_gemini_api_key() -> str | None:
+    key_names = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
+
+    for key_name in key_names:
+        value = os.environ.get(key_name)
+        if value:
+            return value
+
+    try:
+        from dotenv import load_dotenv  # type: ignore
+
+        load_dotenv()
+    except Exception:
+        pass
+
+    for key_name in key_names:
+        value = os.environ.get(key_name)
+        if value:
+            return value
+
+    try:
+        import streamlit as st  # type: ignore
+
+        secrets = getattr(st, "secrets", None)
+        if secrets is not None:
+            for key_name in key_names:
+                value = secrets.get(key_name)
+                if value:
+                    os.environ.setdefault(key_name, value)
+                    return value
+    except Exception:
+        pass
+
+    return None
+
+
 class GeminiGenerator(ResponseGenerator):
     def __init__(self, base_instruction: str, special_tokens=None, model_name: str | None = None):
         super().__init__()
         # Use the official client instead of the chatlib GeminiAPI wrapper
-        api_key = (
-            os.getenv("GEMINI_API_KEY")
-            or os.getenv("GOOGLE_API_KEY")
-        )
+        api_key = _resolve_gemini_api_key()
         if not api_key:
-            raise RuntimeError("Set GEMINI_API_KEY (or GOOGLE_API_KEY) before starting the app.")
+            raise RuntimeError("Set GEMINI_API_KEY or GOOGLE_API_KEY via environment variables or Streamlit secrets.")
         # Ensure dependent integrations (chatlib) see the same key.
         os.environ.setdefault("GEMINI_API_KEY", api_key)
         os.environ.setdefault("GOOGLE_API_KEY", api_key)

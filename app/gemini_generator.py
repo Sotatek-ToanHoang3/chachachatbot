@@ -2,6 +2,7 @@
 
 import logging
 import os
+from collections.abc import Mapping
 from typing import Any
 
 from chatlib.chatbot import DialogueTurn
@@ -15,11 +16,33 @@ from google.generativeai import types
 
 logger = logging.getLogger(__name__)
 
+_KEY_ENV_NAMES = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
+
+
+def _search_mapping_for_key(mapping: Mapping, path: tuple[str, ...] = ()) -> str | None:
+    for key, value in mapping.items():
+        if isinstance(value, Mapping):
+            found = _search_mapping_for_key(value, path + (str(key),))
+            if found:
+                return found
+            continue
+
+        if isinstance(value, str):
+            key_upper = str(key).upper()
+            composed_key = "_".join((*[segment.upper() for segment in path], key_upper)) if path else key_upper
+
+            if key_upper in _KEY_ENV_NAMES or composed_key in _KEY_ENV_NAMES:
+                return value
+
+            if key_upper.endswith("API_KEY") or composed_key.endswith("API_KEY"):
+                haystack = f"{composed_key}_{key_upper}"
+                if any(token in haystack for token in ("GEMINI", "GOOGLE", "GENAI")):
+                    return value
+    return None
+
 
 def _resolve_gemini_api_key() -> str | None:
-    key_names = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
-
-    for key_name in key_names:
+    for key_name in _KEY_ENV_NAMES:
         value = os.environ.get(key_name)
         if value:
             return value
@@ -31,7 +54,7 @@ def _resolve_gemini_api_key() -> str | None:
     except Exception:
         pass
 
-    for key_name in key_names:
+    for key_name in _KEY_ENV_NAMES:
         value = os.environ.get(key_name)
         if value:
             return value
@@ -40,16 +63,26 @@ def _resolve_gemini_api_key() -> str | None:
         import streamlit as st  # type: ignore
 
         secrets = getattr(st, "secrets", None)
-        if secrets is not None:
-            for key_name in key_names:
-                value = secrets.get(key_name)
-                if value:
-                    os.environ.setdefault(key_name, value)
-                    return value
+        if isinstance(secrets, Mapping):
+            found = _search_mapping_for_key(secrets)
+            if found:
+                for key_name in _KEY_ENV_NAMES:
+                    os.environ.setdefault(key_name, found)
+                return found
     except Exception:
         pass
 
     return None
+
+
+def _handle_missing_key(message: str) -> None:
+    try:
+        import streamlit as st  # type: ignore
+
+        st.error(message)
+        st.stop()
+    except Exception:
+        raise RuntimeError(message)
 
 
 class GeminiGenerator(ResponseGenerator):
@@ -58,7 +91,11 @@ class GeminiGenerator(ResponseGenerator):
         # Use the official client instead of the chatlib GeminiAPI wrapper
         api_key = _resolve_gemini_api_key()
         if not api_key:
-            raise RuntimeError("Set GEMINI_API_KEY or GOOGLE_API_KEY via environment variables or Streamlit secrets.")
+            _handle_missing_key(
+                "Gemini API key not found. Add GEMINI_API_KEY (or GOOGLE_API_KEY) either as an environment "
+                "variable, in a local .env file, or via Streamlit secrets."
+            )
+            return  # st.stop() above prevents execution; the return keeps type-checkers happy.
         # Ensure dependent integrations (chatlib) see the same key.
         os.environ.setdefault("GEMINI_API_KEY", api_key)
         os.environ.setdefault("GOOGLE_API_KEY", api_key)

@@ -1,115 +1,129 @@
+"""Streamlit wrapper that embeds the production frontend and backend."""
+from __future__ import annotations
+
 import asyncio
+import socket
+import threading
+import time
 from os import environ, getcwd, path
+from pathlib import Path
+from typing import Optional
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
-from app.common import ChatbotLocale
-from app.response_generator import EmotionChatbotResponseGenerator
-from chatlib.chatbot import DialogueTurn
+try:
+    import uvicorn
+except ImportError as exc:  # pragma: no cover - defensive guard
+    raise RuntimeError("uvicorn must be installed to run the integrated frontend") from exc
 
-
-# -------------------------- environment bootstrap -------------------------- #
+# ---------------------------------------------------------------------------
+# Environment bootstrap
+# ---------------------------------------------------------------------------
 load_dotenv(path.join(getcwd(), ".env"))
 if not environ.get("GOOGLE_API_KEY") and environ.get("GEMINI_API_KEY"):
     environ["GOOGLE_API_KEY"] = environ["GEMINI_API_KEY"]
 
+ROOT_DIR = Path(__file__).resolve().parent
+DIST_DIR = ROOT_DIR / "frontend" / "dist"
+BACKEND_HOST = environ.get("CHATBOT_BACKEND_HOST", "127.0.0.1")
+BACKEND_PORT = int(environ.get("CHATBOT_BACKEND_PORT", "8000"))
+BACKEND_BASE_URL = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
+FRONTEND_EMBED_URL = environ.get("CHATBOT_FRONTEND_URL", BACKEND_BASE_URL)
 
-# ------------------------------- UI helpers -------------------------------- #
-def _create_generator(name: str, age: int, locale: ChatbotLocale) -> EmotionChatbotResponseGenerator:
-    return EmotionChatbotResponseGenerator(user_name=name, user_age=age, locale=locale, verbose=False)
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-
-async def _generate_initial_turn(generator: EmotionChatbotResponseGenerator):
-    response, metadata, _ = await generator.get_response([])
-    return DialogueTurn(message=response, is_user=False, metadata=metadata)
-
-
-async def _generate_reply(
-    generator: EmotionChatbotResponseGenerator,
-    dialogue: list[DialogueTurn],
-) -> DialogueTurn:
-    response, metadata, _ = await generator.get_response(dialogue)
-    return DialogueTurn(message=response, is_user=False, metadata=metadata)
+def _port_is_open(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        return sock.connect_ex((host, port)) == 0
 
 
-def _ensure_session_state() -> None:
-    if "generator" not in st.session_state:
-        st.session_state.generator = None
-    if "dialogue" not in st.session_state:
-        st.session_state.dialogue = []
-    if "locale" not in st.session_state:
-        st.session_state.locale = ChatbotLocale.English
+def _wait_for_url(url: str, timeout: float = 15.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urlopen(url, timeout=1):  # noqa: S310 - internal address
+                return True
+        except URLError:
+            time.sleep(0.2)
+    return False
 
 
-def _reset_session():
-    st.session_state.generator = None
-    st.session_state.dialogue = []
-
-
-def _rerun_app() -> None:
-    if hasattr(st, "rerun"):
-        st.rerun()
-    else:
-        st.experimental_rerun()
-
-
-# ------------------------------- Streamlit UI ------------------------------ #
-st.set_page_config(page_title="ChaCha Chatbot", page_icon="💬", layout="wide")
-_ensure_session_state()
-
-st.sidebar.header("Session setup")
-with st.sidebar.form("session_setup"):
-    user_name = st.text_input("Child's name", value=st.session_state.get("user_name", "Alex"))
-    user_age = st.number_input("Child's age", min_value=0, max_value=120, value=int(st.session_state.get("user_age", 10)))
-    locale_choice = st.selectbox("Language", options=["English", "Korean"], index=0 if st.session_state.locale == ChatbotLocale.English else 1)
-    start_clicked = st.form_submit_button("Start / Restart")
-
-if start_clicked:
-    locale = ChatbotLocale.English if locale_choice == "English" else ChatbotLocale.Korean
-    st.session_state.locale = locale
-    st.session_state.user_name = user_name.strip()
-    st.session_state.user_age = int(user_age)
-    _reset_session()
-    st.session_state.generator = _create_generator(
-        name=st.session_state.user_name,
-        age=st.session_state.user_age,
-        locale=locale,
+def _start_backend_server() -> None:
+    """Run the FastAPI backend (serves API + static SPA)."""
+    config = uvicorn.Config(
+        "backend.server:app",
+        host=BACKEND_HOST,
+        port=BACKEND_PORT,
+        log_level=environ.get("CHATBOT_UVICORN_LOG_LEVEL", "info"),
+        reload=False,
     )
-    initial_turn = asyncio.run(_generate_initial_turn(st.session_state.generator))
-    st.session_state.dialogue.append(initial_turn)
-    _rerun_app()
+    server = uvicorn.Server(config)
+    server.install_signal_handlers = lambda: None  # type: ignore[assignment]
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(server.serve())
 
-if st.sidebar.button("Clear conversation", type="primary"):
-    _reset_session()
-    _rerun_app()
 
-st.title("ChaCha – Emotional Support & Assignment Tutor")
-st.caption("Share how you're feeling or ask for help with homework. ChaCha will respond in kid-friendly language and switch to tutor mode when appropriate.")
+def _ensure_backend_running() -> Optional[str]:
+    if _port_is_open(BACKEND_HOST, BACKEND_PORT):
+        return None
 
-if st.session_state.generator is None:
-    st.info("Configure the session in the sidebar and press **Start / Restart** to begin chatting.")
+    if not DIST_DIR.exists():
+        return "Frontend build not found. Run `npm install` and `npm run build` inside the `frontend/` folder first."
+
+    backend_thread = threading.Thread(target=_start_backend_server, name="backend-server", daemon=True)
+    backend_thread.start()
+
+    index_url = f"{BACKEND_BASE_URL}/"
+    if _wait_for_url(index_url):
+        return None
+
+    return f"Unable to start the backend service on port {BACKEND_PORT}. Check logs for details."
+
+
+# ---------------------------------------------------------------------------
+# Streamlit layout
+# ---------------------------------------------------------------------------
+if not DIST_DIR.exists():
+    st.error('Frontend build not found. Run `npm install` and `npm run build` in the `frontend/` folder, then restart the app.')
     st.stop()
 
-for turn in st.session_state.dialogue:
-    role = "user" if turn.is_user else "assistant"
-    message_caption = None
-    if not turn.is_user and turn.metadata is not None:
-        moderation = turn.metadata.get("moderation")
-        if moderation and "response" in moderation:
-            decision = moderation["response"]
-            if decision.get("risk_level") and decision["risk_level"] != "Safe":
-                message_caption = f"⚠️ Moderation flagged: {decision['risk_level']}"
-    with st.chat_message(role):
-        st.markdown(turn.message)
-        if message_caption:
-            st.caption(message_caption)
+st.set_page_config(page_title="ChaCha Chatbot", page_icon="💬", layout="wide")
+st.markdown(
+    """
+    <style>
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        .block-container {padding: 0;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-user_prompt = st.chat_input("Type your message here...")
-if user_prompt:
-    user_prompt = user_prompt.strip()
-    if user_prompt:
-        st.session_state.dialogue.append(DialogueTurn(message=user_prompt, is_user=True))
-        assistant_turn = asyncio.run(_generate_reply(st.session_state.generator, st.session_state.dialogue))
-        st.session_state.dialogue.append(assistant_turn)
-        _rerun_app()
+if "_backend_ready" not in st.session_state:
+    with st.spinner("Booting backend service..."):
+        error_message = _ensure_backend_running()
+    if error_message:
+        st.session_state["_backend_ready"] = False
+        st.error(error_message)
+        st.stop()
+    st.session_state["_backend_ready"] = True
+
+st.toast("Frontend served via embedded React app", icon="✅")
+
+
+if "127.0.0.1" in FRONTEND_EMBED_URL or "localhost" in FRONTEND_EMBED_URL:
+    st.info("The embedded frontend expects to run on the same machine as this Streamlit app. Remote hosting is not supported.")
+components.html(
+    f"""
+    <iframe src="{FRONTEND_EMBED_URL}" style="border:none;width:100%;height:100vh;" allow="clipboard-write"></iframe>
+    """,
+    height=900,
+)

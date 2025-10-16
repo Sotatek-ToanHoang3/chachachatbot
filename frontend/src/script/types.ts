@@ -7,3 +7,23 @@ export interface ChatMessage{
     timestamp: number
 }
 
+export interface TutorGameBridgeStep {
+    prompt: string
+    hint: string
+    success_keywords: string[]
+}
+
+export interface TutorGameStep {
+    id: string
+    title: string
+    objective: string
+    check_prompt: string
+    success_keywords: string[]
+    hint: string
+    bridge: TutorGameBridgeStep
+}
+
+export interface TutorGamePlan {
+    assignment_overview: string
+    steps: TutorGameStep[]
+}

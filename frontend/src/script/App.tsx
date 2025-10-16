@@ -5,6 +5,7 @@ import {Provider} from "react-redux";
 import { ChatSharePage } from "./app/chat/pages/ChatShare";
 import {SnackbarProvider} from 'notistack';
 import { SessionSignInPage } from "./app/chat/pages/SessionSignInPage";
+import { TutorGamePage } from "./app/tutor-game/pages/TutorGamePage";
 
 export function App() {
     return <Provider store={store}>
@@ -14,6 +15,7 @@ export function App() {
             <Route path={"/signin"} element={<SessionSignInPage/>}/>
             <Route path={"/chat/:sessionId"} element={<ChatPage/>}/>
             <Route path={"/share/:sessionId"} element={<ChatSharePage/>}/>
+            <Route path={"/game/:sessionId/:messageId"} element={<TutorGamePage/>}/>
         </Routes>
     </BrowserRouter></SnackbarProvider></Provider>
 }

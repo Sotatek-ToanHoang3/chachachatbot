@@ -1,5 +1,5 @@
 import { AppDispatch, ReduxAppState } from "../../redux/store";
-import {ChatMessage} from "../../types";
+import { ChatMessage, TutorGamePlan } from "../../types";
 import {createEntityAdapter, createSlice, Draft, EntityAdapter, PayloadAction} from "@reduxjs/toolkit";
 import { NetworkHelper } from "../../network";
 import i18n from "src/i18n";
@@ -20,12 +20,20 @@ export interface ChatState{
     isLoadingMessage: boolean
 
     messages: typeof INITIAL_MESSAGES_STATE
+
+    activeTutorGame?: {
+        sessionId: string
+        messageId: string
+        plan: TutorGamePlan
+        question?: string
+    } | null
 }
 
 const INITIAL_CHAT_STATE: ChatState = {
     sessionInfo: undefined,
     isLoadingMessage: false,
-    messages: INITIAL_MESSAGES_STATE
+    messages: INITIAL_MESSAGES_STATE,
+    activeTutorGame: null
 }
 
 const chatSlice = createSlice({
@@ -45,6 +53,7 @@ const chatSlice = createSlice({
                 sessionId: action.payload.sessionId
             }
             messagesAdapter.removeAll(state.messages)
+            state.activeTutorGame = null
         },
 
         setLoadingState: (state, action: PayloadAction<boolean>) => {
@@ -63,6 +72,14 @@ const chatSlice = createSlice({
             messagesAdapter.removeAll(state.messages)
             messagesAdapter.addMany(state.messages, action)
         },
+
+        openTutorGameOverlay: (state, action: PayloadAction<{ sessionId: string, messageId: string, plan: TutorGamePlan, question?: string }>) => {
+            state.activeTutorGame = action.payload
+        },
+
+        closeTutorGameOverlay: (state) => {
+            state.activeTutorGame = null
+        }
     }
 })
 
@@ -148,6 +165,7 @@ function getLastSystemMessage(messagesState: typeof INITIAL_MESSAGES_STATE): Cha
     }else return null
 }
 
-export const { init } = chatSlice.actions
+export const { init, addMessage } = chatSlice.actions
+export const { openTutorGameOverlay, closeTutorGameOverlay } = chatSlice.actions
 
 export default chatSlice.reducer

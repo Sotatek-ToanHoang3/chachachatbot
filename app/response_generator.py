@@ -95,7 +95,11 @@ class EmotionChatbotResponseGenerator(StateBasedResponseGenerator[EmotionChatbot
                     locale=self.__locale,
                     feeling_sentiment=context.get("feeling_sentiment"),
                     feeling_statement=context.get("feeling_statement"),
+                    assignment_initial_prompt=context.get("assignment_initial_prompt"),
                     assignment_request=context.get("assignment_request"),
+                    tutor_plan=context.get("tutor_plan"),
+                    tutor_stage=context.get("tutor_stage"),
+                    tutor_summary=context.get("tutor_summary"),
                 )
             )
         elif state in [EmotionChatbotPhase.Find, EmotionChatbotPhase.Share, EmotionChatbotPhase.Record]:
@@ -110,7 +114,24 @@ class EmotionChatbotResponseGenerator(StateBasedResponseGenerator[EmotionChatbot
         return generator
 
     def update_generator(self, generator: ResponseGenerator, payload: dict | None):
-        if isinstance(generator, GeminiGenerator) and payload is not None:
+        if not isinstance(generator, GeminiGenerator) or payload is None:
+            return
+        if self.current_state == EmotionChatbotPhase.Tutor:
+            generator.update_instruction_parameters(
+                dict(
+                    user_name=self.__user_name,
+                    user_age=self.__user_age,
+                    locale=self.__locale,
+                    feeling_sentiment=payload.get("feeling_sentiment"),
+                    feeling_statement=payload.get("feeling_statement"),
+                    assignment_initial_prompt=payload.get("assignment_initial_prompt"),
+                    assignment_request=payload.get("assignment_request"),
+                    tutor_plan=payload.get("tutor_plan"),
+                    tutor_stage=payload.get("tutor_stage"),
+                    tutor_summary=payload.get("tutor_summary"),
+                )
+            )
+        else:
             generator.update_instruction_parameters(dict(summarizer_result=payload))
 
     # ----------------------------- Moderation helpers ----------------------------- #
@@ -209,6 +230,21 @@ class EmotionChatbotResponseGenerator(StateBasedResponseGenerator[EmotionChatbot
             return True
         return False
 
+    @staticmethod
+    def __looks_like_specific_math_question(message: str) -> bool:
+        text = re.sub(r"\s+", " ", message.lower()).strip()
+        if not text:
+            return False
+        if re.search(r"\d", text) and re.search(r"(\+|\-|\*|/|=|plus|minus|times|multiply|multiplied|divide|divided|difference|sum|product|total|fraction|percent)", text):
+            return True
+        if re.search(r"\b(x|y|z)\b", text) and re.search(r"(=|solve|value|answer|unknown)", text):
+            return True
+        if re.search(r"\d", text) and re.search(r"\b(each|per|split|share|shared|equal|equally|every|groups?)\b", text):
+            return True
+        if "?" in text and ("how many" in text or "what is" in text or "solve" in text):
+            return True
+        return False
+
     def __should_enter_tutor(self, message: str) -> bool:
         if not self.__detect_assignment_request(message):
             return False
@@ -240,19 +276,55 @@ class EmotionChatbotResponseGenerator(StateBasedResponseGenerator[EmotionChatbot
         ]
         return any(marker in text for marker in exit_markers)
 
-    def __build_tutor_payload(self, current: EmotionChatbotPhase, request_message: str) -> dict:
+    async def __build_tutor_payload(
+        self,
+        current: EmotionChatbotPhase,
+        request_message: str,
+        dialog: Dialogue,
+        *,
+        build_plan: bool,
+        assignment_topic: str | None = None,
+        stage_override: str | None = None,
+        existing_payload: dict | None = None,
+    ) -> dict:
         explore_payload = self._get_memoized_payload(EmotionChatbotPhase.Explore) or {}
         label_payload = self._get_memoized_payload(EmotionChatbotPhase.Label) or {}
+        base_payload = dict(existing_payload or {})
+        assignment_topic_text = (assignment_topic or request_message).strip()
         payload = {
+            **base_payload,
             "key_episode": explore_payload.get("key_episode"),
             "user_emotion": self.__latest_feeling_statement or explore_payload.get("user_emotion"),
             "identified_emotions": label_payload.get("identified_emotions"),
             "feeling_sentiment": self.__latest_feeling_sentiment,
             "feeling_statement": self.__latest_feeling_statement,
-            "assignment_request": request_message.strip(),
+            "assignment_initial_prompt": assignment_topic_text,
             "source_state": current.value if isinstance(current, EmotionChatbotPhase) else str(current),
         }
-        self.__last_assignment_request = request_message.strip()
+        if build_plan:
+            assignment_request = request_message.strip()
+            self.__last_assignment_request = assignment_request
+            payload["assignment_request"] = assignment_request
+            payload.pop("tutor_summary", None)
+            payload.pop("tutor_summary_token", None)
+            plan_params = tutor.TutorPlanParams(
+                assignment_request=assignment_request,
+                feeling_statement=payload.get("feeling_statement"),
+                feeling_sentiment=payload.get("feeling_sentiment"),
+                user_name=self.__user_name,
+                user_age=self.__user_age,
+                locale=self.__locale,
+            )
+            plan = await tutor.build_tutor_game_plan(dialog, plan_params)
+            payload["tutor_plan"] = plan.model_dump()
+            payload["tutor_stage"] = stage_override or "quest_ready"
+        else:
+            self.__last_assignment_request = assignment_topic_text
+            payload["assignment_request"] = ""
+            payload["tutor_plan"] = None
+            payload["tutor_stage"] = stage_override or "collect_question"
+            payload.pop("tutor_summary", None)
+            payload.pop("tutor_summary_token", None)
         return payload
 
     async def calc_next_state_info(self, current: EmotionChatbotPhase, dialog: Dialogue) -> tuple[
@@ -277,11 +349,81 @@ class EmotionChatbotResponseGenerator(StateBasedResponseGenerator[EmotionChatbot
         if summarizer_result.sensitive_topic is True:
             return EmotionChatbotPhase.Help, None
         if current == EmotionChatbotPhase.Tutor:
+            tutor_payload = (
+                self._get_memoized_payload(EmotionChatbotPhase.Tutor)
+                or self.current_state_payload
+                or {}
+            )
             if last_user_turn is not None and self.__should_exit_tutor(last_user_message):
                 return EmotionChatbotPhase.Explore, {"revisited": True}
+            if last_user_turn is not None:
+                summary = dict_utils.get_nested_value(last_user_turn.metadata or {}, "tutor_game_summary")
+                if summary:
+                    summary_token = summary.get("finished_at") or summary.get("source_message_id") or last_user_message
+                    if tutor_payload.get("tutor_summary_token") != summary_token:
+                        updated_payload = dict(tutor_payload)
+                        updated_payload["tutor_summary"] = summary
+                        updated_payload["tutor_summary_token"] = summary_token
+                        updated_payload["tutor_stage"] = "quest_summary"
+                        return None, updated_payload
+                stage = tutor_payload.get("tutor_stage") or "collect_question"
+                stripped_message = last_user_message.strip()
+                assignment_request = (tutor_payload.get("assignment_request") or "").strip()
+                is_assignment_like = self.__detect_assignment_request(last_user_message) or self.__looks_like_specific_math_question(last_user_message)
+                if stage == "collect_question":
+                    initial_prompt = (tutor_payload.get("assignment_initial_prompt") or "").strip()
+                    if (
+                        stripped_message
+                        and stripped_message != initial_prompt
+                        and stripped_message != self.__last_assignment_request
+                    ):
+                        assignment_topic = initial_prompt or self.__last_assignment_request
+                        updated_payload = await self.__build_tutor_payload(
+                            current,
+                            stripped_message,
+                            dialog,
+                            build_plan=True,
+                            assignment_topic=assignment_topic or stripped_message,
+                            existing_payload=tutor_payload,
+                        )
+                        return None, updated_payload
+                else:
+                    if (
+                        stripped_message
+                        and is_assignment_like
+                        and stripped_message != assignment_request
+                    ):
+                        base_payload = dict(tutor_payload)
+                        base_payload.pop("tutor_summary", None)
+                        base_payload.pop("tutor_summary_token", None)
+                        if self.__looks_like_specific_math_question(last_user_message):
+                            updated_payload = await self.__build_tutor_payload(
+                                current,
+                                stripped_message,
+                                dialog,
+                                build_plan=True,
+                                assignment_topic=stripped_message,
+                                existing_payload=base_payload,
+                            )
+                        else:
+                            updated_payload = await self.__build_tutor_payload(
+                                current,
+                                stripped_message,
+                                dialog,
+                                build_plan=False,
+                                assignment_topic=stripped_message,
+                                stage_override="collect_question",
+                                existing_payload=base_payload,
+                            )
+                        return None, updated_payload
             return None
         if last_user_turn is not None and self.__should_enter_tutor(last_user_message):
-            tutor_payload = self.__build_tutor_payload(current, last_user_message)
+            tutor_payload = await self.__build_tutor_payload(
+                current,
+                last_user_message,
+                dialog,
+                build_plan=False,
+            )
             return EmotionChatbotPhase.Tutor, tutor_payload
 
         # Explore --> Label

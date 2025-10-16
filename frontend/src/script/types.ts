@@ -13,6 +13,14 @@ export interface TutorGameBridgeStep {
     success_keywords: string[]
 }
 
+export interface TutorGameSubstep {
+    label: string
+    prompt: string
+    memory_hook?: string
+    visual?: string
+    parallel_example?: string
+}
+
 export interface TutorGameStep {
     id: string
     title: string
@@ -21,6 +29,7 @@ export interface TutorGameStep {
     success_keywords: string[]
     hint: string
     bridge: TutorGameBridgeStep
+    substeps?: TutorGameSubstep[]
 }
 
 export interface TutorGamePlan {

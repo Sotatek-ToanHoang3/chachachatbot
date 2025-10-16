@@ -1,4 +1,5 @@
 import re
+from difflib import SequenceMatcher
 from typing import Optional
 
 from chatlib.utils import dict_utils
@@ -198,6 +199,17 @@ class EmotionChatbotResponseGenerator(StateBasedResponseGenerator[EmotionChatbot
             return "positive"
         return None
 
+    @staticmethod
+    def __has_fuzzy_keyword(text: str, keywords: list[str], threshold: float = 0.82) -> bool:
+        tokens = re.findall(r"[a-z]+", text)
+        for keyword in keywords:
+            if " " in keyword:
+                continue
+            for token in tokens:
+                if SequenceMatcher(None, token, keyword).ratio() >= threshold:
+                    return True
+        return False
+
     def __detect_assignment_request(self, message: str) -> bool:
         text = self.__clean_text(message)
         if not text:
@@ -222,7 +234,13 @@ class EmotionChatbotResponseGenerator(StateBasedResponseGenerator[EmotionChatbot
             "study guide",
         ]
         helper_keywords = ["help", "explain", "teach", "show", "understand", "solve", "work through", "walk me", "practice"]
-        if any(kw in text for kw in study_keywords) and any(helper in text for helper in helper_keywords):
+        study_match = any(kw in text for kw in study_keywords)
+        helper_match = any(helper in text for helper in helper_keywords)
+        if not study_match:
+            study_match = self.__has_fuzzy_keyword(text, study_keywords)
+        if not helper_match:
+            helper_match = self.__has_fuzzy_keyword(text, helper_keywords)
+        if study_match and helper_match:
             return True
         if re.search(r"help\s+me\s+with\s+(my\s+)?(homework|assignment|math|science|essay|project)", text):
             return True

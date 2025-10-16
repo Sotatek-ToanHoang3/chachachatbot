@@ -351,12 +351,20 @@ export const TutorGamePage = (props: TutorGamePageProps) => {
     if (!plan || !currentStep) {
       return []
     }
+    const substepSnippets =
+      currentStep.substeps?.flatMap(substep => [
+        substep.prompt ?? "",
+        substep.parallel_example ?? "",
+        substep.visual ?? "",
+        substep.memory_hook ?? "",
+      ]) ?? []
     const stepText = [
       currentStep.check_prompt,
       currentStep.objective,
       currentStep.hint,
       currentStep.bridge?.prompt ?? "",
       currentStep.bridge?.hint ?? "",
+      ...substepSnippets,
     ].join(" ")
     const planContext = plan.steps.map(step => `${step.check_prompt} ${step.objective}`).join(" ")
     const collected = [
@@ -390,6 +398,20 @@ export const TutorGamePage = (props: TutorGamePageProps) => {
     }
     if (currentStep.bridge?.prompt) {
       starters.push(`Bridge idea: ${currentStep.bridge.prompt}`)
+    }
+    if (currentStep.substeps && currentStep.substeps.length > 0) {
+      currentStep.substeps.slice(0, 2).forEach(substep => {
+        if (substep.prompt) {
+          starters.push(substep.prompt)
+        }
+        if (substep.memory_hook) {
+          starters.push(`Memory check: ${substep.memory_hook}`)
+        }
+      })
+      const exampleSubstep = currentStep.substeps.find(substep => substep.parallel_example)
+      if (exampleSubstep?.parallel_example) {
+        starters.push(`Mini example: ${exampleSubstep.parallel_example}`)
+      }
     }
     return Array.from(new Set(starters.filter(Boolean))).slice(0, 5)
   }, [currentStep, question])
@@ -882,6 +904,44 @@ export const TutorGamePage = (props: TutorGamePageProps) => {
               Level {currentIndex + 1}: {currentStep.title}
             </h2>
             <p className="mt-2 text-sm text-slate-600">{currentStep.objective}</p>
+            {currentStep.substeps && currentStep.substeps.length > 0 ? (
+              <div className="mt-4 rounded-xl border border-purple-100 bg-purple-50/70 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-purple-600">Mini Moves</p>
+                <ul className="mt-3 space-y-2">
+                  {currentStep.substeps.map((substep, idx) => (
+                    <li
+                      key={`${currentStep.id}-sub-${idx}`}
+                      className="rounded-lg border border-purple-100 bg-white/80 px-3 py-2 shadow-sm"
+                    >
+                      <div className="flex items-start gap-2">
+                        <span className="text-sm font-semibold text-purple-600">{substep.label}</span>
+                        <p className="text-sm text-slate-700">{substep.prompt}</p>
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-500">
+                        {substep.memory_hook ? (
+                          <span className="flex items-center gap-1">
+                            <span className="font-semibold text-slate-600">Memory</span>
+                            <span>{substep.memory_hook}</span>
+                          </span>
+                        ) : null}
+                        {substep.parallel_example ? (
+                          <span className="flex items-center gap-1">
+                            <span className="font-semibold text-slate-600">Example</span>
+                            <span>{substep.parallel_example}</span>
+                          </span>
+                        ) : null}
+                        {substep.visual ? (
+                          <span className="flex items-center gap-1">
+                            <span className="font-semibold text-slate-600">Visual</span>
+                            <span className="font-mono text-slate-700">{substep.visual}</span>
+                          </span>
+                        ) : null}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <div className="mt-4 rounded-xl border border-indigo-100 bg-white px-4 py-3">
               <p className="text-sm font-semibold text-indigo-600">
                 {bridgeActive ? "Bridge Prompt" : "Challenge Prompt"}

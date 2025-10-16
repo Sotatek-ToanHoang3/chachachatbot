@@ -51,6 +51,16 @@ export const TutorQuestCard = (props: {
             <div>
               <p className="font-medium text-indigo-700">{step.title}</p>
               <p className="text-slate-600">{step.objective}</p>
+              {step.substeps && step.substeps.length > 0 ? (
+                <ul className="mt-1 space-y-1 text-xs text-slate-500">
+                  {step.substeps.slice(0, 3).map((substep, subIndex) => (
+                    <li key={`${step.id}-preview-${subIndex}`}>
+                      <span className="font-semibold text-indigo-500">{substep.label}</span>{" "}
+                      <span>{substep.prompt}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           </li>
         ))}
